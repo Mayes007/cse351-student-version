@@ -1,7 +1,7 @@
 """ 
 Course: CSE 351
 Lesson: L01 Team Activity
-File:   team.py
+File:   team_threads.py
 Author: Samantha
 Purpose: Find prime numbers
 
@@ -53,7 +53,7 @@ def main():
     log.start_timer()
 
     start = 10000000000
-    range_count = 100000
+    range_count = 100007
     numbers_processed = 0
     for i in range(start, start + range_count):
         numbers_processed += 1
