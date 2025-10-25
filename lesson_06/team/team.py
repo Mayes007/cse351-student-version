@@ -2,7 +2,7 @@
 Course: CSE 351
 Team  : Week 06
 File  : team.py
-Author:  <Your name>
+Author:  Samantha Mayes 
 
 Purpose: Team Activity: 
 
@@ -138,7 +138,8 @@ class Board():
         print(f'Finding {word}...')
         for row in range(self.size):
             for col in range(self.size):
-                for d in range(0, 8):
+                if self.get_letter(row, col) == word[0]:
+                 for d in range(0, 8):
                     if self._word_at_this_location(row, col, d, word):
                         return True
         return False

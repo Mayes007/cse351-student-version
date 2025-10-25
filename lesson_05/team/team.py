@@ -2,7 +2,7 @@
 Course: CSE 351
 Lesson: L05 Team Activity
 File:   team.py
-Author: <Add name here>
+Author: Samantha Mayes
 Purpose: Find prime numbers
 
 Instructions:
