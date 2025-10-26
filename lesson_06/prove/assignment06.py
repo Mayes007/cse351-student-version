@@ -30,6 +30,9 @@ CANNY_THRESHOLD2 = 155
 # Allowed image extensions
 ALLOWED_EXTENSIONS = ['.jpg']
 
+# Sentinel value for queue processing
+STOP = "STOP"
+
 # ---------------------------------------------------------------------------
 def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
@@ -102,13 +105,93 @@ def process_images_in_folder(input_folder,              # input folder with imag
     print(f"Finished processing. {processed_count} images processed into '{output_folder}'.")
 
 # ---------------------------------------------------------------------------
+def worker_smooth(q_in, q_out):
+    while True:
+        item = q_in.get()
+        if item == STOP:
+            q_out.put(STOP)
+            break
+        in_path, out_path = item
+        img = cv2.imread(in_path)
+        if img is None:
+            print(f"Warning: Could not read image '{in_path}'. Skipping.")
+            continue
+        smoothed_img = task_smooth_image(img, GAUSSIAN_BLUR_KERNEL_SIZE)
+        q_out.put((smoothed_img, out_path))
+
+def worker_gray(q_in, q_out):
+    while True:
+        item = q_in.get()
+        if item == STOP:
+            q_out.put(STOP)
+            break
+        smoothed_img, out_path = item
+        gray_img = task_convert_to_grayscale(smoothed_img)
+        q_out.put((gray_img, out_path))
+
+def worker_edges(q_in):
+    while True:
+        item = q_in.get()
+        if item == STOP:
+            break
+        gray_img, out_path = item
+        edge_img = task_detect_edges(gray_img, CANNY_THRESHOLD1, CANNY_THRESHOLD2)
+        cv2.imwrite(out_path, edge_img)
+
 def run_image_processing_pipeline():
     print("Starting image processing pipeline...")
 
     # TODO
     # - create queues
-    # - create barriers
+    q1 = mp.Queue(maxsize=256)  # (in_path, out_path)
+    q2 = mp.Queue(maxsize=256)  # (smoothed_img, out_path)
+    q3 = mp.Queue(maxsize=256)  # (gray_img, out_path)
+    # - create barriers 
+    start_event = mp.Event()
+
+    # --- Decide worker counts ---
+    cpu = max(1, (mp.cpu_count() or 2) - 1)
+    smooth_workers = max(1, cpu // 2)   # I/O + light CPU
+    gray_workers   = max(1, cpu // 2)   # light CPU
+    edge_workers   = max(1, cpu)        # CPU heavy
+
     # - create the three processes groups
+    smoothers = [mp.Process(target=worker_smooth, args=(q1, q2), daemon=True)
+                 for _ in range(smooth_workers)]
+    grayers   = [mp.Process(target=worker_gray, args=(q2, q3), daemon=True)
+                 for _ in range(gray_workers)]
+    edgers    = [mp.Process(target=worker_edges, args=(q3,), daemon=True)
+                 for _ in range(edge_workers)]
+    for p in smoothers + grayers + edgers:
+        p.start()
+
+    # If you modified workers to wait on start_event, release them here:
+    # start_event.set()
+
+    # --- Feed stage 1 with (in_path, out_path) pairs ---
+    file_pairs = []
+    for filename in os.listdir(INPUT_FOLDER):
+        file_ext = os.path.splitext(filename)[1].lower()
+        if file_ext in ALLOWED_EXTENSIONS:
+            in_path = os.path.join(INPUT_FOLDER, filename)
+            out_path = os.path.join(STEP1_OUTPUT_FOLDER, filename)
+            file_pairs.append((in_path, out_path))
+    for pair in file_pairs:
+        q1.put(pair)
+
+    # --- Send sentinels to stage 1 (one per smoother). They propagate downstream. ---
+    for _ in range(smooth_workers):
+        q1.put(STOP)
+    q1.close()
+
+    # --- Join in order ---
+    for p in smoothers:
+        p.join()
+    for p in grayers:
+        p.join()
+    for p in edgers:
+        p.join()
+
     # - you are free to change anything in the program as long as you
     #   do all requirements.
 
@@ -146,4 +229,4 @@ if __name__ == "__main__":
         run_image_processing_pipeline()
 
     log.write()
-    log.stop_timer('Total Time To complete')
+    log.stop_timer('Total Time')
