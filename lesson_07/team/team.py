@@ -65,14 +65,73 @@ import threading
 
 PHILOSOPHERS = 5
 MAX_MEALS_EATEN = PHILOSOPHERS * 5 # NOTE: Total meals to be eaten, not per philosopher!
+delay=1
 
+global meal_count
+meal_count=0
+meals=[0]*PHILOSOPHERS
+
+class Philosopher(threading.Thread):
+        def _init_(self, index, left, right):
+            threading.Thread._init_(self)
+            self.index = index
+            self.left = left
+            self.right_fork = right
+
+        def run(self):
+             global meal_count
+             global meals
+             done=False
+             while not done:
+                  with self.lock_meals:
+                      if meal_count >= MAX_MEALS_EATEN:
+                          done = True
+                          continue
+                      
+                  self.left.acquire()
+                  if not self.right.acquire(blocking=False):
+                      self.left.release()
+                      
+                      self.left, self.right= self.right, self.left
+                      continue
+                  
+                  self.dining()
+
+                  with self.lock_meals:
+                      meal_count += 1
+                      meals[self.index] += 1
+
+                      self.left.release()
+                      self.right.release()
+
+                      self.thinking()
+
+                      pass
+                  
+        def dining(self):
+             print("Philosopher", self.id, "starts to eat.")
+             time.sleep(random.randint(1,3))
+             print("Philosopher", self.id, "finishes eating")
+             
+  
 def main():
     # TODO - Create the forks.
     # TODO - Create PHILOSOPHERS philosophers.
     # TODO - Start them eating and thinking.
     # TODO - Display how many times each philosopher ate.
     pass
+meal_count=0
+lock_meals = threading.Lock()
+forks=[threading.Lock() for _ in range(PHILOSOPHERS)]
+philosophers=[Philosopher(i, lock_meals, forks[i % PHILOSOPHERS], forks[(i+1) % PHILOSOPHERS]) for i in range(PHILOSOPHERS)]
 
+for p in philosophers:
+    p.start()
+
+for p in philosophers:
+    p.join()
+
+    print('All Done:', meal_count, meals)
 
 if __name__ == '__main__':
     main()
