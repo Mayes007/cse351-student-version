@@ -22,16 +22,20 @@ position:
 What would be your strategy?
 
 I would have each visited maze square remember where it came from by storing a “parent”
-pointer (for example, a dictionary that maps (row, col) -> previous (row, col) on the path).
-When a thread reaches the exit, I would follow these parent links backward from the end
-square to the start to reconstruct the path, then draw that path in a single color.
+pointer. For example, I could keep a dictionary that maps (row, col) to the previous
+(row, col) that we moved from. When a thread finds the exit, it can follow these parent
+links backwards from the exit cell to the start cell, building a list of positions that
+form the solution path. Then I could reverse that list and redraw those cells in a
+special solution color.
 
 Why would it work?
 
-Because every move in the search is from a valid neighbor, each parent pointer forms one
-step of a real path through the maze. The thread that finds the exit has a continuous chain
-of parents all the way back to the start. Walking those links in reverse guarantees we get a
-correct start-to-end path that we can then display after all threads have stopped.
+This works because the parent pointers record the exact route that led to the exit.
+Each time we move into a new square, we only set its parent once, so the parent chain
+from the exit back to the start always describes one valid path through the maze.
+By following the chain from the exit to the start and reversing it, we reconstruct
+the path in the correct order and can display it even though the search was done
+with multiple threads.
 
 """
 
@@ -74,6 +78,9 @@ thread_count = 0
 stop = False
 speed = SLOW_SPEED
 
+threads = []
+thread_lock = threading.Lock()
+
 def get_color():
     """ Returns a different color when called """
     global current_color_index
@@ -85,120 +92,94 @@ def get_color():
 
 
 # TODO: Add any function(s) you need, if any, here.
+def _walk_maze(maze, row, col, color):
+    """Recursive walker for a single thread starting at (row, col)."""
+    global stop
 
+    # If someone already found the exit, stop exploring.
+    if stop:
+        return
+
+    # If this thread has reached the end, signal everyone to stop.
+    if maze.at_end(row, col):
+        stop = True
+        return
+
+    # Compute valid next moves from this cell.
+    valid_moves = []
+    for next_row, next_col in maze.get_possible_moves(row, col):
+        if maze.can_move_here(next_row, next_col):
+            valid_moves.append((next_row, next_col))
+
+    # No where else to go from here.
+    if not valid_moves:
+        return
+
+    # Current thread will follow the first move;
+    # extra moves each get their own new thread.
+    first_move = valid_moves[0]
+    other_moves = valid_moves[1:]
+
+    # Spawn new threads for each additional branch.
+    for nr, nc in other_moves:
+        if stop:
+            break
+
+        new_color = get_color()
+
+        def branch_start(r=nr, c=nc, col=new_color):
+            # Each branch thread first moves into its starting cell,
+            # then continues walking recursively.
+            if stop:
+                return
+            maze.move(r, c, col)
+            _walk_maze(maze, r, c, col)
+
+        t = threading.Thread(target=branch_start)
+
+        # Track how many threads we create and keep them in a list.
+        global thread_count, threads
+        with thread_lock:
+            thread_count += 1
+            threads.append(t)
+
+        t.start()
+
+    # Continue down the first branch in this same thread.
+    if not stop:
+        nr, nc = first_move
+        maze.move(nr, nc, color)
+        _walk_maze(maze, nr, nc, color)
 
 def solve_find_end(maze):
     """ Finds the end position using threads. Nothing is returned. """
-    # When one of the threads finds the end position, stop all of them.
-    global stop
+    global stop, thread_count, threads
+
+    # Reset globals for each new maze
     stop = False
+    thread_count = 0
+    threads = []
 
-    def search(row, col, color):
-        """Recursive search that spins off threads at intersections."""
-        global stop
-        global thread_count
+    # Get the starting position
+    start_row, start_col = maze.get_start_pos()
+    start_color = get_color()
 
+    # Initial worker thread: starts at the maze entrance
+    def start_thread():
         if stop:
-            return  # some other thread already found exit
-
-        # If we reached the end, signal stop and return.
-        try:
-            if maze.at_end(row, col):
-                stop = True
-                return
-        except Exception:
-            # If maze doesn't provide at_end or call fails, bail out.
             return
+        maze.move(start_row, start_col, start_color)
+        _walk_maze(maze, start_row, start_col, start_color)
 
-        # Get candidate moves and filter to those we can actually move to.
-        try:
-            moves = maze.get_possible_moves(row, col)
-        except Exception:
-            return
+    t0 = threading.Thread(target=start_thread)
+    thread_count += 1
+    threads.append(t0)
+    t0.start()
 
-        valid = []
-        for mv in moves:
-            # mv may be a tuple (r, c) or other form; try to unpack
-            try:
-                r, c = mv
-            except Exception:
-                continue
-            try:
-                if maze.can_move_here(r, c):
-                    valid.append((r, c))
-            except Exception:
-                # if can_move_here is not present, assume move is valid
-                valid.append((r, c))
+    # Wait for all created threads to finish
+    for t in threads:
+        t.join()
 
-        if not valid:
-            return  # dead end
-
-        child_threads = []
-
-        # For every extra move beyond the first, spawn a new thread.
-        for r, c in valid[1:]:
-            new_color = get_color()
-            try:
-                maze.move(r, c, new_color)
-            except Exception:
-                pass
-            t = threading.Thread(target=search, args=(r, c, new_color))
-            thread_count += 1
-            t.start()
-            child_threads.append(t)
-
-        # Continue following the first move in the current thread.
-        first_r, first_c = valid[0]
-        try:
-            maze.move(first_r, first_c, color)
-        except Exception:
-            pass
-        search(first_r, first_c, color)
-
-        # Join any child threads we created before returning.
-        for t in child_threads:
-            t.join()
-
-    # Determine a reasonable starting position (try several common names).
-    start_row = start_col = None
-    start = None
-    if hasattr(maze, 'get_start_pos'):
-        try:
-            start = maze.get_start_pos()
-        except Exception:
-            start = None
-    if start is None and hasattr(maze, 'get_start'):
-        try:
-            start = maze.get_start()
-        except Exception:
-            start = None
-    if start is None and hasattr(maze, 'start'):
-        start = getattr(maze, 'start')
-    if start is None and hasattr(maze, 'start_row') and hasattr(maze, 'start_col'):
-        try:
-            start_row = getattr(maze, 'start_row')
-            start_col = getattr(maze, 'start_col')
-        except Exception:
-            start_row = start_col = None
-
-    if start is not None:
-        try:
-            if isinstance(start, tuple) and len(start) == 2:
-                start_row, start_col = start
-        except Exception:
-            start_row = start_col = None
-
-    # If we couldn't locate a start, do nothing.
-    if start_row is None or start_col is None:
-        return
-
-    # Begin search from the start position using a fresh color.
-    color = get_color()
-    try:
-        maze.move(start_row, start_col, color)
-    except Exception:
-        pass
-    search(start_row, start_col, color)
 
 
 
