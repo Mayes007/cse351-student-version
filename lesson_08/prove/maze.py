@@ -119,12 +119,12 @@ class Maze():
 
     def get_start_pos(self):
         """ Return the starting position of the maze """
-        return self._start_pos
+        return self.get_start_pos
 
 
     def at_end(self, row, col):
         """ Did we reach the end of the maze """
-        return self._end_pos == (row, col)
+        return self.get_end_pos == (row, col)
 
 
     # *************************************************************************
