@@ -8,7 +8,6 @@ Don't change this code.  You are not submitting it with your assignment
 """
 import time
 import requests
-
 from cse351 import *
 
 TOP_API_URL = 'http://127.0.0.1:8123'

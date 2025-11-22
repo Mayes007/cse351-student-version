@@ -139,6 +139,73 @@ def _fetch_person(person_id, tree, tree_lock):
     # print(f'Fetched person {person.get_id()}')   # helpful for debugging
     return person
 
+
+def depth_fs_pedigree(family_id, tree):
+    """
+    Depth-first retrieval (recursive) using _fetch_family and _fetch_person.
+
+    For each family:
+      - fetch the Family from the server
+      - fetch husband, wife, and all children (using threads so those API calls overlap)
+      - then recursively go to the parents of the husband and wife (DFS).
+    """
+    tree_lock = threading.Lock()
+    visited_families = set()
+
+    def dfs(current_family_id):
+        if current_family_id is None or current_family_id == 0:
+            return
+
+        # avoid re-processing the same family
+        if current_family_id in visited_families:
+            return
+        visited_families.add(current_family_id)
+
+        # get this family
+        family = _fetch_family(current_family_id, tree, tree_lock)
+        if family is None:
+            return
+
+        # collect all person ids in this family
+        husband_id = family.get_husband()
+        wife_id = family.get_wife()
+
+        person_ids = []
+        if husband_id is not None and husband_id != 0:
+            person_ids.append(husband_id)
+        if wife_id is not None and wife_id != 0:
+            person_ids.append(wife_id)
+        for child_id in family.get_children():
+            if child_id is not None and child_id != 0:
+                person_ids.append(child_id)
+
+        # fetch all people for this family in parallel
+        threads = []
+        for pid in person_ids:
+            t = threading.Thread(target=_fetch_person, args=(pid, tree, tree_lock))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        # now recurse to parents (DFS)
+        with tree_lock:
+            husband = tree.get_person(husband_id) if husband_id else None
+            wife = tree.get_person(wife_id) if wife_id else None
+
+        parent_family_ids = []
+        if husband is not None:
+            parent_family_ids.append(husband.get_parentid())
+        if wife is not None:
+            parent_family_ids.append(wife.get_parentid())
+
+        for pfid in parent_family_ids:
+            if pfid is not None and pfid != 0:
+                dfs(pfid)
+
+    # kick off DFS from the starting family id
+    dfs(family_id)
 # -----------------------------------------------------------------------------
 def breadth_fs_pedigree(family_id, tree):
     # KEEP this function even if you don't implement it
