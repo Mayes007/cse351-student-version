@@ -1,7 +1,7 @@
 """
 Course: CSE 251, week 14
 File: common.py
-Author: <your name>
+Author: Samantha Mayes
 
 Don't change this code.  You are not submitting it with your assignment
 
