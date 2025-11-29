@@ -1,7 +1,7 @@
 """
 Course: CSE 351
 Assignment: 06
-Author: [Your Name]
+Author: Samantha Mayes
 
 Instructions:
 
