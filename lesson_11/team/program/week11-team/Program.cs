@@ -1,4 +1,4 @@
-﻿/*
+﻿﻿/*
  * Course: CSE 3541
  * Week  : 11
  *
@@ -17,7 +17,6 @@
  * - https://www.csharptutorial.net/csharp-linq/linq-select/
  */
 
-
 using System;
 using System.Diagnostics;
 using Newtonsoft.Json.Linq;
@@ -26,6 +25,7 @@ class Program
 {
     private static readonly HttpClient HttpClient = new();
     private const string TopApiUrl = "http://127.0.0.1:8790";
+    private static int callCount = 0;
     
     // Makes one URL call to the server
     private static async Task<JObject?> GetDataFromServerAsync(string url)
@@ -33,6 +33,7 @@ class Program
         try
         {
             // TODO - increment calls to the server int
+            Interlocked.Increment(ref callCount);
             var jsonString = await HttpClient.GetStringAsync(url);
             return JObject.Parse(jsonString);
         }
@@ -55,10 +56,10 @@ class Program
 
         Console.WriteLine($"  Number of urls = {urls.Count}");
         
-        // Loop through each URL sequentially.
-        foreach (var url in urls)
+        // Use Select() to process all urls in the list at once
+        // This works because we are using async for the lambda function
+        var tasks = urls.Select(async url =>
         {
-            // Wait for the current network call to finish before starting the next.
             var item = await GetDataFromServerAsync(url);
             if (item != null)
             {
@@ -66,7 +67,10 @@ class Program
                 var name = item["name"] ?? item["title"];
                 Console.WriteLine($"  - {name}");
             }
-        }
+        });
+
+        // Wait for ALL the tasks in the list to complete.
+        await Task.WhenAll(tasks);
     }    
     
     static async Task Main()
@@ -74,7 +78,9 @@ class Program
         var stopwatch = Stopwatch.StartNew();
         
         var film6 = await GetDataFromServerAsync($"{TopApiUrl}/films/6");
+#pragma warning disable CS8602 // Dereference of a possibly null reference.
         Console.WriteLine(film6["director"]);
+#pragma warning restore CS8602 // Dereference of a possibly null reference.
 
         await GetUrlsAsync(film6, "characters");
         await GetUrlsAsync(film6, "planets");
@@ -85,7 +91,7 @@ class Program
         stopwatch.Stop();
         
         // TODO - display the number of calls to the server
-
+        Console.WriteLine($"Total calls to the server = {callCount}");
         Console.WriteLine($"Total execution time: {stopwatch.Elapsed.TotalSeconds:F2} seconds");
     }
 }
