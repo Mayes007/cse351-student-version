@@ -2,7 +2,7 @@
 Course: CSE 351 
 Assignment: 08 Prove Part 2
 File:   prove_part_2.py
-Author: <Add name here>
+Author: Samantha Mayes
 
 Purpose: Part 2 of assignment 8, finding the path to the end of a maze using recursion.
 
@@ -21,11 +21,21 @@ position:
 
 What would be your strategy?
 
-<Answer here>
+I would have each visited maze square remember where it came from by storing a “parent”
+pointer. For example, I could keep a dictionary that maps (row, col) to the previous
+(row, col) that we moved from. When a thread finds the exit, it can follow these parent
+links backwards from the exit cell to the start cell, building a list of positions that
+form the solution path. Then I could reverse that list and redraw those cells in a
+special solution color.
 
 Why would it work?
 
-<Answer here>
+This works because the parent pointers record the exact route that led to the exit.
+Each time we move into a new square, we only set its parent once, so the parent chain
+from the exit back to the start always describes one valid path through the maze.
+By following the chain from the exit to the start and reversing it, we reconstruct
+the path in the correct order and can display it even though the search was done
+with multiple threads.
 
 """
 
@@ -68,6 +78,9 @@ thread_count = 0
 stop = False
 speed = SLOW_SPEED
 
+threads = []
+thread_lock = threading.Lock()
+
 def get_color():
     """ Returns a different color when called """
     global current_color_index
@@ -79,13 +92,93 @@ def get_color():
 
 
 # TODO: Add any function(s) you need, if any, here.
+def _walk_maze(maze, row, col, color):
+    """Recursive walker for a single thread starting at (row, col)."""
+    global stop
 
+    # If someone already found the exit, stop exploring.
+    if stop:
+        return
+
+    # If this thread has reached the end, signal everyone to stop.
+    if maze.at_end(row, col):
+        stop = True
+        return
+
+    # Compute valid next moves from this cell.
+    valid_moves = []
+    for next_row, next_col in maze.get_possible_moves(row, col):
+        if maze.can_move_here(next_row, next_col):
+            valid_moves.append((next_row, next_col))
+
+    # No where else to go from here.
+    if not valid_moves:
+        return
+
+    # Current thread will follow the first move;
+    # extra moves each get their own new thread.
+    first_move = valid_moves[0]
+    other_moves = valid_moves[1:]
+
+    # Spawn new threads for each additional branch.
+    for nr, nc in other_moves:
+        if stop:
+            break
+
+        new_color = get_color()
+
+        def branch_start(r=nr, c=nc, col=new_color):
+            # Each branch thread first moves into its starting cell,
+            # then continues walking recursively.
+            if stop:
+                return
+            maze.move(r, c, col)
+            _walk_maze(maze, r, c, col)
+
+        t = threading.Thread(target=branch_start)
+
+        # Track how many threads we create and keep them in a list.
+        global thread_count, threads
+        with thread_lock:
+            thread_count += 1
+            threads.append(t)
+
+        t.start()
+
+    # Continue down the first branch in this same thread.
+    if not stop:
+        nr, nc = first_move
+        maze.move(nr, nc, color)
+        _walk_maze(maze, nr, nc, color)
 
 def solve_find_end(maze):
     """ Finds the end position using threads. Nothing is returned. """
-    # When one of the threads finds the end position, stop all of them.
-    global stop
+    global stop, thread_count, threads
+
+    # Reset globals for each new maze
     stop = False
+    thread_count = 0
+    threads = []
+
+    # Get the starting position
+    start_row, start_col = maze.get_start_pos()
+    start_color = get_color()
+
+    # Initial worker thread: starts at the maze entrance
+    def start_thread():
+        if stop:
+            return
+        maze.move(start_row, start_col, start_color)
+        _walk_maze(maze, start_row, start_col, start_color)
+
+    t0 = threading.Thread(target=start_thread)
+    thread_count += 1
+    threads.append(t0)
+    t0.start()
+
+    # Wait for all created threads to finish
+    for t in threads:
+        t.join()
 
 
 

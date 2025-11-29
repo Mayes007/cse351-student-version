@@ -88,17 +88,87 @@ def merge_normal(arr):
 def merge_sort_thread(arr):
     # TODO - Add your code here to use threads.
     #        call, you need to create a thread to handle that call
-    pass
+   
+   if len(arr) > 1:
+        mid = len(arr) // 2
+        L = arr[:mid]
+        R = arr[mid:]
+
+        left_thread = threading.Thread(target=merge_sort_thread, args=(L,))
+        right_thread = threading.Thread(target=merge_sort_thread, args=(R,))
+
+        left_thread.start()
+        right_thread.start()
+
+        left_thread.join()
+        right_thread.join()
+
+        i = j = k = 0
+
+        while i < len(L) and j < len(R):
+            if L[i] < R[j]:
+                arr[k] = L[i]
+                i += 1
+            else:
+                arr[k] = R[j]
+                j += 1
+            k += 1
+
+        while i < len(L):
+            arr[k] = L[i]
+            i += 1
+            k += 1
+
+        while j < len(R):
+            arr[k] = R[j]
+            j += 1
+            k += 1
+   pass
 
 
 def merge_sort_process(arr):
     # TODO - Add your code here to use process.
     #        call, you need to create a process to handle that call
+    if len(arr) <=1:
+        return
+    mid = len(arr) // 2
+    L = arr[:mid]
+    R = arr[mid:]
+
+    left_process = mp.Process(target=merge_sort_process, args=(L,))
+    right_process = mp.Process(target=merge_sort_process, args=(R,))
+    left_process.start()
+    right_process.start()
+    left_process.join()
+    right_process.join()
+
+    i = j = k = 0
+    while i < len(L) and j < len(R):
+        if L[i] < R[j]:
+            arr[k] = L[i]
+            i += 1
+        else:
+            arr[k] = R[j]
+            j += 1
+        k += 1
+
+    while i < len(L):
+        arr[k] = L[i]
+        i += 1
+        k += 1
+
+    while j < len(R):
+        arr[k] = R[j]
+        j += 1
+        k += 1
     pass
 
 
 # TODO - Add any function(s) here if needed.
-
+def _process_worker(sub_arr, conn):
+    merge_sort_process(sub_arr)
+    conn.send(sub_arr)
+    conn.close()
 
 def main():
     merges = [

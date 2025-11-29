@@ -29,6 +29,31 @@ FAST_SPEED = 1
 speed = SLOW_SPEED
 
 # TODO: Add any functions needed here.
+def _search_from(maze, path, row, col, color):
+    """Recursive depth-first search from (row, col).
+       Returns True if it eventually reaches the end."""
+    # Base case: are we at the end?
+    if maze.at_end(row, col):
+        return True
+
+    # Try every possible move from this cell
+    for next_row, next_col in maze.get_possible_moves(row, col):
+        # Only go to valid, unvisited, non-wall positions
+        if maze.can_move_here(next_row, next_col):
+            # Move there visually and record in the path
+            maze.move(next_row, next_col, color)
+            path.append((next_row, next_col))
+
+            # Recurse from the new position
+            if _search_from(maze, path, next_row, next_col, color):
+                return True
+
+            # Dead end: undo the move (backtrack)
+            maze.restore(next_row, next_col)
+            path.pop()
+
+    # No moves from here lead to the exit
+    return False
 
 def solve_path(maze):
     """ Solve the maze and return the path found between the start and end positions.  
@@ -37,7 +62,12 @@ def solve_path(maze):
     # TODO: Solve the maze recursively while tracking the correct path.
 
     # Hint: You can create an inner function to do the recursion
+    start_row, start_col = maze.get_start_pos()
+    maze.move(start_row, start_col, COLOR)
+    path.append((start_row, start_col))
 
+    # Run recursive DFS from the start
+    _search_from(maze, path, start_row, start_col, COLOR)
     return path
 
 

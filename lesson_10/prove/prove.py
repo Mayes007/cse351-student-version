@@ -2,7 +2,7 @@
 Course: CSE 351
 Lesson Week: 10
 File: assignment.py
-Author: <your name>
+Author: Samantha Mayes
 Purpose: Assignment 10 - Family Search
 """
 from common import *
