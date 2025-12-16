@@ -5,6 +5,7 @@ namespace Assignment14;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
+ public const string TopApiUrl = "http://127.0.0.1:8123";
 public class Person()
 {
     [JsonPropertyName("id")]

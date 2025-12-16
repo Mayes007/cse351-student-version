@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace Assignment14;
-
+ public const string TopApiUrl = "http://127.0.0.1:8123";
 public enum LogLevel
 {
     Debug,    // Detailed information, typically of interest only when diagnosing problems.
@@ -88,6 +88,17 @@ public static class Logger
         Console.WriteLine($"[LOGGER_CONFIG] Minimum log level set to: {MinimumLevel}");
         Console.WriteLine($"[LOGGER_CONFIG] Console logging enabled: {LogToConsole}");
     }
+public static void ConfigureAssignmentLog(LogLevel minimumLevel = LogLevel.Debug, bool logToConsole = true)
+{
+    LogToConsole = logToConsole;
+
+    // Put assignment.log next to your executable (guaranteed location)
+    string logPath = Path.Combine(AppContext.BaseDirectory, "assignment.log");
+
+    Configure(minimumLevel: minimumLevel, logToFile: true, filePath: logPath);
+
+    Info($"assignment.log path: {logPath}");
+}
 
 
     // --- Public Logging Methods ---
