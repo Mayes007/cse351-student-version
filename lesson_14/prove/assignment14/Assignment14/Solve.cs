@@ -10,190 +10,229 @@ public static class Solve
         Timeout = TimeSpan.FromSeconds(180)
     };
 
-   
+    public const string TopApiUrl = "http://127.0.0.1:8123";
 
-    // Prevent overwhelming the server (still very fast)
-    private static readonly SemaphoreSlim HttpGate = new(initialCount: 200, maxCount: 200);
+    // Tree uses dictionaries -> protect mutations
+    private static readonly object TreeLock = new();
 
-    private const int MaxRetries = 6;
-    private const int BaseDelayMs = 60;
-
-    // =======================================================================================================
-    // Provided: basic GET that returns JObject or null
+    // -----------------------------
+    // Robust GET with retries
+    // -----------------------------
     public static async Task<JObject?> GetDataFromServerAsync(string url)
     {
-        try
-        {
-            var jsonString = await HttpClient.GetStringAsync(url);
+        const int retries = 50;
+        const int delayMs = 10;
 
-            // Server sometimes returns empty/{} when overloaded
-            if (string.IsNullOrWhiteSpace(jsonString) || jsonString.Trim() == "{}")
-                return null;
-
-            return JObject.Parse(jsonString);
-        }
-        catch (Exception ex)
+        for (int i = 0; i < retries; i++)
         {
-            Logger.Warning($"Error fetching {url}", ex);
-            return null;
-        }
-    }
-
-    // =======================================================================================================
-    // Retry wrapper to survive server overload
-    private static async Task<JObject?> GetWithRetryAsync(string url)
-    {
-        for (int attempt = 1; attempt <= MaxRetries; attempt++)
-        {
-            await HttpGate.WaitAsync();
             try
             {
-                var obj = await GetDataFromServerAsync(url);
-                if (obj != null) return obj;
-            }
-            finally
-            {
-                HttpGate.Release();
-            }
+                var jsonString = await HttpClient.GetStringAsync(url);
 
-            int delay = BaseDelayMs * (int)Math.Pow(2, attempt - 1);
-            delay = Math.Min(delay, 1000);
-            await Task.Delay(delay);
+                if (string.IsNullOrWhiteSpace(jsonString))
+                {
+                    await Task.Delay(delayMs);
+                    continue;
+                }
+
+                return JObject.Parse(jsonString);
+            }
+            catch (HttpRequestException)
+            {
+                await Task.Delay(delayMs);
+            }
+            catch (TaskCanceledException)
+            {
+                await Task.Delay(delayMs);
+            }
+            catch
+            {
+                await Task.Delay(delayMs);
+            }
         }
 
-        Logger.Warning($"FAILED after {MaxRetries} retries: {url}");
         return null;
     }
 
-    // =======================================================================================================
-    // Fetch Person by id
-    private static async Task<Person?> FetchPersonAsync(long personId)
-    {
-        if (personId <= 0) return null;
-
-        var obj = await GetWithRetryAsync($"{TopApiUrl}/person/{personId}");
-        return obj == null ? null : Person.FromJson(obj.ToString());
-    }
-
-    // =======================================================================================================
-    // Fetch Family by id
+    // -----------------------------
+    // Fetch helpers (use your FromJson)
+    // -----------------------------
     private static async Task<Family?> FetchFamilyAsync(long familyId)
     {
         if (familyId <= 0) return null;
 
-        var obj = await GetWithRetryAsync($"{TopApiUrl}/family/{familyId}");
-        return obj == null ? null : Family.FromJson(obj.ToString());
+        var json = await GetDataFromServerAsync($"{TopApiUrl}/family/{familyId}");
+        return json != null ? Family.FromJson(json.ToString()) : null;
     }
 
-    // =======================================================================================================
-    // Fetch a family and ALL people in it (husband, wife, children), then add to Tree
-    private static async Task<(Family? fam, Person? husb, Person? wife)> FetchAndAddFamilyAsync(long familyId, Tree tree)
+    private static async Task<Person?> FetchPersonAsync(long personId)
     {
-        var fam = await FetchFamilyAsync(familyId);
-        if (fam == null) return (null, null, null);
+        if (personId <= 0) return null;
 
-        // Store family
-        if (tree.GetFamily(fam.Id) == null)
-            tree.AddFamily(fam);
-
-        // Fetch husband/wife/children in parallel
-        Task<Person?> husbTask = FetchPersonAsync(fam.HusbandId);
-        Task<Person?> wifeTask = FetchPersonAsync(fam.WifeId);
-
-        var childTasks = fam.Children.Select(FetchPersonAsync).ToList();
-
-        var all = new List<Task<Person?>>(2 + childTasks.Count) { husbTask, wifeTask };
-        all.AddRange(childTasks);
-
-        var people = await Task.WhenAll(all);
-
-        // Store people
-        foreach (var p in people)
-        {
-            if (p == null) continue;
-            if (!tree.PersonExists(p.Id))
-                tree.AddPerson(p);
-        }
-
-        return (fam, await husbTask, await wifeTask);
+        var json = await GetDataFromServerAsync($"{TopApiUrl}/person/{personId}");
+        return json != null ? Person.FromJson(json.ToString()) : null;
     }
 
-    // =======================================================================================================
-    // PART 1: DFS (recursive) + threading
-    public static async Task<bool> DepthFS(long familyId, Tree tree)
+    private static void AddFamilyIfMissing(Tree tree, Family family)
+    {
+        lock (TreeLock)
+        {
+            if (!tree.DoesFamilyExist(family.Id))
+                tree.AddFamily(family);
+        }
+    }
+
+    private static void AddPersonIfMissing(Tree tree, Person person)
+    {
+        lock (TreeLock)
+        {
+            if (!tree.DoesPersonExist(person.Id))
+                tree.AddPerson(person);
+        }
+    }
+
+    // ============================================================
+    // PART 1: DFS (recursive) + parallel fetching of people
+    // ============================================================
+    public static async Task<bool> DepthFS(long startFamilyId, Tree tree)
     {
         var visitedFamilies = new ConcurrentDictionary<long, byte>();
 
-        async Task DFS(long famId)
+        async Task DfsAsync(long familyId)
         {
-            // base cases
-            if (famId <= 0) return;
-            if (!visitedFamilies.TryAdd(famId, 0)) return;
+            if (familyId <= 0) return;
 
-            // Visit current node (family) and add people
-            var (_, husb, wife) = await FetchAndAddFamilyAsync(famId, tree);
+            // DFS visited set
+            if (!visitedFamilies.TryAdd(familyId, 0))
+                return;
 
-            // DFS recursion target: parents' family ids (from Person.ParentId)
-            long hParentFam = husb?.ParentId ?? 0;
-            long wParentFam = wife?.ParentId ?? 0;
+            // 1) Get family
+            var family = await FetchFamilyAsync(familyId);
+            if (family == null) return;
 
-            // THREADING: run both parent branches at the same time
-            var tasks = new List<Task>(2);
-            if (hParentFam > 0) tasks.Add(DFS(hParentFam));
-            if (wParentFam > 0) tasks.Add(DFS(wParentFam));
+            AddFamilyIfMissing(tree, family);
 
-            if (tasks.Count > 0)
-                await Task.WhenAll(tasks);
+            // 2) Fetch husband/wife/children in parallel
+            var personIds = new List<long>();
+            if (family.HusbandId > 0) personIds.Add(family.HusbandId);
+            if (family.WifeId > 0) personIds.Add(family.WifeId);
+            foreach (var c in family.Children)
+                if (c > 0) personIds.Add(c);
+
+            var tasks = personIds.Select(async pid =>
+            {
+                var p = await FetchPersonAsync(pid);
+                if (p != null) AddPersonIfMissing(tree, p);
+            });
+
+            await Task.WhenAll(tasks);
+
+            // 3) DFS recursion: go to parents of husband and wife
+            long husbandParentFam = 0;
+            long wifeParentFam = 0;
+
+            lock (TreeLock)
+            {
+                var husband = family.HusbandId > 0 ? tree.GetPerson(family.HusbandId) : null;
+                var wife = family.WifeId > 0 ? tree.GetPerson(family.WifeId) : null;
+
+                if (husband != null) husbandParentFam = husband.ParentId;
+                if (wife != null) wifeParentFam = wife.ParentId;
+            }
+
+            if (husbandParentFam > 0) await DfsAsync(husbandParentFam);
+            if (wifeParentFam > 0) await DfsAsync(wifeParentFam);
         }
 
-        Logger.Info("Running Depth First Search (recursive)...");
-        await DFS(familyId);
-        Logger.Info("DFS done.");
+        await DfsAsync(startFamilyId);
         return true;
     }
 
-    // =======================================================================================================
-    // PART 2: BFS (NO recursion) + threading
-    public static async Task<bool> BreathFS(long famid, Tree tree)
+    // ============================================================
+    // PART 2: BFS (no recursion) + worker tasks
+    // ============================================================
+    public static async Task<bool> BreathFS(long startFamilyId, Tree tree)
     {
         var visitedFamilies = new ConcurrentDictionary<long, byte>();
         var queue = new ConcurrentQueue<long>();
-        queue.Enqueue(famid);
 
-        Logger.Info("Running Breadth First Search (iterative)...");
-        
-        while (!queue.IsEmpty)
+        visitedFamilies.TryAdd(startFamilyId, 0);
+        queue.Enqueue(startFamilyId);
+
+        // Increase if needed; IO-bound so more helps until server saturates
+        int workerCount = 30;
+
+        // Lets workers know when the whole BFS is done
+        int inFlight = 0;
+
+        async Task Worker()
         {
-            // Take a snapshot "layer" to process concurrently
-            var level = new List<long>();
-            while (queue.TryDequeue(out long id))
+            while (true)
             {
-                level.Add(id);
-                if (level.Count >= 2000) break; // keep batches reasonable
-            }
+                if (!queue.TryDequeue(out var fid))
+                {
+                    if (Volatile.Read(ref inFlight) == 0)
+                        break;
 
-            // Deduplicate & skip visited
-            level = level.Where(id => id > 0 && visitedFamilies.TryAdd(id, 0)).Distinct().ToList();
-            if (level.Count == 0) continue;
+                    await Task.Delay(1);
+                    continue;
+                }
 
-            // THREADING: process all families in this batch concurrently
-            var tasks = level.Select(async id =>
-            {
-                var (_, husb, wife) = await FetchAndAddFamilyAsync(id, tree);
-                return (h: husb?.ParentId ?? 0, w: wife?.ParentId ?? 0);
-            }).ToList();
+                Interlocked.Increment(ref inFlight);
 
-            var parents = await Task.WhenAll(tasks);
+                try
+                {
+                    var family = await FetchFamilyAsync(fid);
+                    if (family == null) continue;
 
-            // Enqueue next families (parents) for BFS order
-            foreach (var (h, w) in parents)
-            {
-                if (h > 0) queue.Enqueue(h);
-                if (w > 0) queue.Enqueue(w);
+                    AddFamilyIfMissing(tree, family);
+
+                    // Fetch everyone in this family in parallel
+                    var personIds = new List<long>();
+                    if (family.HusbandId > 0) personIds.Add(family.HusbandId);
+                    if (family.WifeId > 0) personIds.Add(family.WifeId);
+                    foreach (var c in family.Children)
+                        if (c > 0) personIds.Add(c);
+
+                    var tasks = personIds.Select(async pid =>
+                    {
+                        var p = await FetchPersonAsync(pid);
+                        if (p != null) AddPersonIfMissing(tree, p);
+                    });
+
+                    await Task.WhenAll(tasks);
+
+                    // Enqueue parent families (BFS expansion)
+                    long husbandParentFam = 0;
+                    long wifeParentFam = 0;
+
+                    lock (TreeLock)
+                    {
+                        var husband = family.HusbandId > 0 ? tree.GetPerson(family.HusbandId) : null;
+                        var wife = family.WifeId > 0 ? tree.GetPerson(family.WifeId) : null;
+
+                        if (husband != null) husbandParentFam = husband.ParentId;
+                        if (wife != null) wifeParentFam = wife.ParentId;
+                    }
+
+                    if (husbandParentFam > 0 && visitedFamilies.TryAdd(husbandParentFam, 0))
+                        queue.Enqueue(husbandParentFam);
+
+                    if (wifeParentFam > 0 && visitedFamilies.TryAdd(wifeParentFam, 0))
+                        queue.Enqueue(wifeParentFam);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref inFlight);
+                }
             }
         }
 
-        Logger.Info("BFS done.");
+        var workers = Enumerable.Range(0, workerCount)
+            .Select(_ => Task.Run(Worker))
+            .ToArray();
+
+        await Task.WhenAll(workers);
         return true;
     }
 }
